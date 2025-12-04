@@ -1,0 +1,8 @@
+# Requis pour le projet Titanic (Python >= 3.10 recommandé)
+pandas>=1.5
+numpy>=1.22
+scikit-learn>=1.0
+matplotlib>=3.5
+seaborn>=0.11
+openpyxl>=3.0    # pour pd.read_excel(.xlsx)
+xlrd>=2.0       # pour pd.read_excel(.xls)
