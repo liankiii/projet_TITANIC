@@ -1,58 +1,69 @@
 """
-Module de prediction interactive pour la survie Titanic.
-Permet de saisir les caracteristiques d'un passager et obtenir une prediction.
+predict.py: Module de prédiction interactive pour la survie Titanic.
+Permet de saisir les caractéristiques d'un passager et obtenir une prédiction.
 """
 import sys
 import os
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+
+# Ajouter le chemin parent pour les imports (A MODIFIER SELON VOTRE STRUCTURE et si erreur d'import sur "data")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from config import FeatureConfig, LabelConfig, ClassNameMapping
+from encoders import EncoderManager
 
 
 class PassengerPredictor:
-    """Predictor pour la survie d'un passager."""
+    """Prédicteur pour la survie d'un passager."""
     
-    def __init__(self, trainer):
+    def __init__(self, pipeline):
         """
-        Initialise le predictor.
+        Initialise le prédicteur.
         
         Args:
-            trainer: Instance de TitanicModelTrainer avec modeles entrainess
+            pipeline: Instance de TitanicPipeline avec modèles entraînés
         """
-        self.trainer = trainer
-        self.model = trainer.models.get('random_forest')
+        self.pipeline = pipeline
+        self.model = pipeline.models.get('random_forest')
+        self.encoder_manager = pipeline.encoder_manager
+        self.config = pipeline.config
+        
         if not self.model:
-            raise ValueError("Random Forest non entrainnee")
+            raise ValueError("Random Forest non entraîné")
     
     def get_passenger_input(self) -> dict:
         """
-        Menu interactif pour saisir les caracteristiques d'un passager.
+        Menu interactif pour saisir les caractéristiques d'un passager.
         
         Returns:
-            Dict avec les donnees du passager
+            Dict avec les données du passager
         """
         print("\n" + "="*60)
-        print("PREDICTION DE SURVIE TITANIC")
+        print("PRÉDICTION DE SURVIE TITANIC")
         print("="*60)
-        print("\nEntrez les caracteristiques du passager:")
+        print("\nEntrez les caractéristiques du passager:")
         
         # Nom
         name = input("\nNom du passager: ").strip()
+        if not name:
+            name = "Passager Inconnu"
         
         # Sexe
         while True:
             sex = input("Sexe (male/female): ").strip().lower()
-            if sex in ['male', 'female']:
+            if sex in ['male', 'female', 'm', 'f', 'h', 'homme', 'femme']:
+                sex = 'male' if sex in ['male', 'm', 'h', 'homme'] else 'female'
                 break
-            print("Repondez par 'male' ou 'female'")
+            print("Répondez par 'male' ou 'female'")
         
         # Age
         while True:
             try:
-                age = float(input("Age (0-80): "))
+                age = float(input("Âge (0-80): "))
                 if 0 <= age <= 120:
                     break
-                print("L'age doit etre entre 0 et 120")
+                print("L'âge doit être entre 0 et 120")
             except ValueError:
                 print("Entrez un nombre valide")
         
@@ -88,20 +99,20 @@ class PassengerPredictor:
             except ValueError:
                 print("Entrez un nombre valide")
         
-        # Nombre de freres/soeurs
+        # Nombre de frères/soeurs
         while True:
             try:
-                sibsp = int(input("Nombre de freres/soeurs a bord: "))
+                sibsp = int(input("Nombre de frères/soeurs à bord: "))
                 if 0 <= sibsp <= 10:
                     break
-                print("Le nombre doit etre entre 0 et 10")
+                print("Le nombre doit être entre 0 et 10")
             except ValueError:
                 print("Entrez un nombre entier")
         
         # Nombre de parents/enfants
         while True:
             try:
-                parch = int(input("Nombre de parents/enfants a bord: "))
+                parch = int(input("Nombre de parents/enfants à bord: "))
                 if 0 <= parch <= 10:
                     break
                 print("Le nombre doit etre entre 0 et 10")
@@ -117,7 +128,6 @@ class PassengerPredictor:
         while True:
             port_choice = input("Choisissez le port d'embarquement (1/2/3 ou S/C/Q): ").strip().upper()
             
-            # Mapper les choix vers les codes
             port_mapping = {
                 '1': 'S', 'SOUTHAMPTON': 'S', 'S': 'S',
                 '2': 'C', 'CHERBOURG': 'C', 'C': 'C',
@@ -127,9 +137,33 @@ class PassengerPredictor:
             if port_choice in port_mapping:
                 embarked = port_mapping[port_choice]
                 port_names = {'S': 'Southampton', 'C': 'Cherbourg', 'Q': 'Queenstown'}
-                print(f"Port selectionne: {port_names[embarked]} ({embarked})")
+                print(f"Port sélectionné: {port_names[embarked]} ({embarked})")
                 break
             print("Choisissez 1, 2, 3 ou entrez S, C, Q")
+        
+        # Calculer les features dérivées
+        family_size = sibsp + parch + 1
+        fare_per_person = fare / family_size if family_size > 0 else fare
+        
+        # Déterminer le groupe d'âge
+        age_bins = self.config.age_bins
+        age_labels = self.config.age_labels
+        age_group = age_labels[-1]  # Par défaut
+        for i in range(len(age_bins) - 1):
+            if age_bins[i] <= age < age_bins[i + 1]:
+                age_group = age_labels[i]
+                break
+        
+        # Classe de ticket
+        class_mapping = ClassNameMapping().mapping
+        ticket_class = class_mapping.get(pclass, 'troisieme')
+        
+        # Extraire le titre du nom (simpliste)
+        title = 'Mr' if sex == 'male' else 'Miss'
+        if age < 18 and sex == 'male':
+            title = 'Master'
+        elif 'mrs' in name.lower() or 'mme' in name.lower():
+            title = 'Mrs'
         
         return {
             'name': name,
@@ -140,97 +174,60 @@ class PassengerPredictor:
             'SibSp': sibsp,
             'Parch': parch,
             'Embarked': embarked,
-            'family_size': sibsp + parch + 1
+            'family_size': family_size,
+            'fare_per_person': fare_per_person,
+            'age_group': age_group,
+            'ticket_class': ticket_class,
+            'title': title,
+            'deck': 'U',  # Unknown par défaut
+            'ticket_prefix': 'UNK'  # Unknown par défaut
         }
     
     def prepare_input(self, passenger: dict) -> np.ndarray:
         """
-        Prepare input data for model prediction.
+        Prépare les données pour la prédiction.
         
         Args:
-            passenger: Dict with passenger data
+            passenger: Dict avec les données du passager
         
         Returns:
-            Normalized feature array for model
+            Array normalisé pour le modèle
         """
-        # Create DataFrame from passenger dict
+        # Créer un DataFrame à partir du passager
         df = pd.DataFrame([passenger])
         
-        # Ensure numeric columns - include derived features
-        numeric_cols = ['Age', 'Fare', 'Pclass', 'SibSp', 'Parch', 'family_size', 'fare_per_person']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Create ticket_class from Pclass (like FeatureEngineer does)
-        class_names = {1: 'premiere', 2: 'deuxieme', 3: 'troisieme'}
-        if 'ticket_class' not in df.columns:
-            df['ticket_class'] = df['Pclass'].map(class_names)
-        
-        # Extract numeric features
-        X = df[numeric_cols].values.astype(float)
-        
-        # Encode categorical features - match the trainer's exact columns
-        categorical_cols = ['Sex', 'Embarked', 'ticket_class', 'age_group', 'title', 'deck', 'ticket_prefix']
-        
-        for col in categorical_cols:
-            if col in self.trainer.label_encoders:
-                le = self.trainer.label_encoders[col]
-                # Handle unseen labels by replacing with first class
-                unseen_mask = ~pd.Series([df[col].values[0]]).isin(le.classes_)
-                if unseen_mask.any():
-                    df[col] = le.classes_[0]
-                encoded = le.transform([df[col].values[0]])
-            else:
-                le = LabelEncoder()
-                if col == 'Sex':
-                    le.fit(['male', 'female'])
-                elif col == 'Embarked':
-                    le.fit(['S', 'C', 'Q'])
-                elif col == 'ticket_class':
-                    le.fit(['premiere', 'deuxieme', 'troisieme'])
-                elif col == 'title':
-                    le.fit(['Mr', 'Mrs', 'Miss', 'Master', 'Dr', 'Rev', 'Rare', 'Unknown'])
-                elif col == 'deck':
-                    le.fit(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'T', 'U'])
-                elif col == 'ticket_prefix':
-                    le.fit(['NUM', 'PC', 'A', 'PP', 'CA', 'STONO', 'SC', 'CASOTON', 'F', 'SC/Paris', 'SCParis', 'C', 'SOPP', 'SW/PP', 'SOP', 'SOTONO2', 'FC', 'WEP', 'STONO2', 'SC/AH', 'LINE', 'Unknown', 'UNK'])
-                elif col == 'age_group':
-                    le.fit(['enfant', 'ado', 'jeune_adulte', 'adulte', 'senior'])
-                
-                encoded = le.transform([df[col].values[0]])
-            
-            X = np.column_stack([X, encoded])
-        
-        # Normaliser avec le scaler du trainer
-        scaler = self.trainer.scalers.get('main')
-        if scaler:
-            X = scaler.transform(X)
+        # Utiliser l'encoder_manager du pipeline
+        X = self.encoder_manager.preprocess_features(
+            df,
+            self.config.numeric_cols,
+            self.config.categorical_cols,
+            fit=False  # Utiliser les encodeurs existants
+        )
         
         return X
     
-    def predict(self, passenger: dict) -> tuple[float, str]:
+    def predict(self, passenger: dict) -> tuple:
         """
-        Predit la survie d'un passager.
+        Prédit la survie d'un passager.
         
         Args:
-            passenger: Dict avec les donnees du passager
+            passenger: Dict avec les données du passager
         
         Returns:
-            Tuple (probabilite_survie, interpretation)
+            Tuple (probabilité_survie, interprétation)
         """
         X = self.prepare_input(passenger)
         
-        # Prediction
+        # Prédiction
         prediction = self.model.predict(X)[0]
         probability = self.model.predict_proba(X)[0]
         
-        # Prob de survie
+        # Probabilité de survie
         prob_survive = probability[1]
         
-        # Interpretation
+        # Interprétation
         if prob_survive > 0.7:
-            interpretation = "TRES BON (>70%)"
+            interpretation = "TRÈS BON (>70%)"
         elif prob_survive > 0.5:
             interpretation = "BON (>50%)"
         elif prob_survive > 0.3:
@@ -242,14 +239,12 @@ class PassengerPredictor:
     
     def show_profile(self, passenger: dict):
         """Affiche le profil du passager."""
-        # Noms complets des ports
         port_names = {
             'S': 'Southampton', 
             'C': 'Cherbourg', 
             'Q': 'Queenstown'
         }
         
-        # Noms des classes
         class_names = {
             1: '1ère classe (Luxe)',
             2: '2e classe (Intermédiaire)', 
@@ -260,15 +255,16 @@ class PassengerPredictor:
         print("-" * 60)
         print(f"Nom: {passenger['name']}")
         print(f"Sexe: {'Femme' if passenger['Sex'] == 'female' else 'Homme'}")
-        print(f"Age: {passenger['Age']} ans")
+        print(f"Âge: {passenger['Age']} ans ({passenger['age_group']})")
         print(f"Classe: {class_names.get(passenger['Pclass'], passenger['Pclass'])}")
-        print(f"Tarif: {passenger['Fare']} £")
+        print(f"Tarif: {passenger['Fare']:.2f} £ ({passenger['fare_per_person']:.2f} £/personne)")
         family_text = "Seul(e)" if passenger['family_size'] == 1 else f"{passenger['family_size']} personnes"
         print(f"Famille: {family_text}")
         print(f"Embarquement: {port_names.get(passenger['Embarked'], passenger['Embarked'])}")
+        print(f"Titre: {passenger['title']}")
     
     def run_prediction(self):
-        """Lance une prediction interactive."""
+        """Lance une prédiction interactive."""
         try:
             # Saisie
             passenger = self.get_passenger_input()
@@ -276,16 +272,16 @@ class PassengerPredictor:
             # Afficher le profil
             self.show_profile(passenger)
             
-            # Prediction
-            print("\nCALCUL DE LA PREDICTION...")
+            # Prédiction
+            print("\nCALCUL DE LA PRÉDICTION...")
             prob, interp = self.predict(passenger)
             
-            # Resultats
+            # Résultats
             print("\n" + "="*60)
-            print("RESULTAT DE LA PREDICTION")
+            print("RÉSULTAT DE LA PRÉDICTION")
             print("="*60)
             print(f"\nChances de survie: {prob*100:.1f}%")
-            print(f"Evaluation: {interp}\n")
+            print(f"Évaluation: {interp}\n")
             
             if prob > 0.5:
                 print("Le passager a plus de chances de SURVIVRE")
@@ -295,30 +291,35 @@ class PassengerPredictor:
             return prob
         
         except KeyboardInterrupt:
-            print("\n\nAnnule par l'utilisateur.")
+            print("\n\nAnnulé par l'utilisateur.")
             return None
         except Exception as e:
             print(f"Erreur: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 
-def interactive_menu(trainer):
+def interactive_menu(pipeline):
     """
-    Menu interactif pour les predictions.
+    Menu interactif pour les prédictions.
     
     Args:
-        trainer: Instance de TitanicModelTrainer
+        pipeline: Instance de TitanicPipeline
     """
-    predictor = PassengerPredictor(trainer)
+    predictor = PassengerPredictor(pipeline)
+    
+    # Première prédiction
+    predictor.run_prediction()
     
     while True:
         try:
-            choice = input("\n\nVoulez-vous faire une autre prediction? (O/N): ").strip().upper()
+            choice = input("\n\nVoulez-vous faire une autre prédiction? (O/N): ").strip().upper()
             if choice in ['N', 'NON']:
                 print("\nFin du programme.")
                 break
-            elif choice not in ['O', 'OUI', 'Y', 'YES']:
-                print("Repondez par O (oui) ou N (non)")
+            elif choice not in ['O', 'OUI', 'Y', 'YES', '']:
+                print("Répondez par O (oui) ou N (non)")
                 continue
             
             predictor.run_prediction()
@@ -329,27 +330,27 @@ def interactive_menu(trainer):
 
 
 if __name__ == "__main__":
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'data'))
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+    print("="*60)
+    print("CHARGEMENT DU MODÈLE...")
+    print("="*60)
     
-    from data.data_loader import TitanicDataLoader
-    from core.features import FeatureEngineer
-    from core.train import TitanicModelTrainer
+    # Importer et exécuter le pipeline
+    from pipeline import TitanicPipeline
     
-    # Charger et preparer
-    loader = TitanicDataLoader("data/Titanic-Dataset.xls")
-    df = loader.load_data()
+    # Chemin du fichier de données (relatif au répertoire parent)
+    data_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'Titanic-Dataset.xls')
     
-    engineer = FeatureEngineer(df)
-    df = engineer.create_demographic_features()
-    df = engineer.create_passenger_profiles()
+    # Créer et entraîner le pipeline
+    pipeline = TitanicPipeline(data_path)
+    pipeline.load_data()
+    pipeline.engineer_features()
+    pipeline.split_data()
+    pipeline.preprocess_features()
+    pipeline.train_models_cv()
+    pipeline.evaluate_on_test()
     
-    # Entrainner les modeles
-    trainer = TitanicModelTrainer(df, None)
-    trainer.train_models()
-        
-    # Menu
-    predictor = PassengerPredictor(trainer)
-    predictor.run_prediction()
-    interactive_menu(trainer)
+    print("\nModèle chargé ")
+    print(f"   Meilleur F1 score (test): {pipeline.test_results['random_forest']['f1_score']:.3f}")
+    
+    # Lancer le menu interactif
+    interactive_menu(pipeline)
